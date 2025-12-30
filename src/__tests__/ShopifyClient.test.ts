@@ -213,71 +213,80 @@ describe("ShopifyClient", () => {
   });
 
   describe("Draft Orders", () => {
-    it("should create and complete draft order", async () => {
-      // load products to get a valid variant id
-      const allProducts = await client.loadProducts(
-        SHOPIFY_ACCESS_TOKEN,
-        MYSHOPIFY_DOMAIN,
-        null,
-        100
-      );
-      const variantIds = allProducts.products.flatMap((product) =>
-        product.variants.edges.map((variant) => variant.node.id.toString())
-      );
-      const variantId = variantIds[0];
-      expect(variantId).toBeDefined();
-      if (!variantId) {
-        throw new Error("No variant id found");
-      }
-      const draftOrderData: CreateDraftOrderPayload = {
-        lineItems: [
-          {
-            variantId,
-            quantity: 1,
+    it(
+      "should create and complete draft order",
+      async () => {
+        // load products to get a valid variant id that is available for sale
+        const allProducts = await client.loadProducts(
+          SHOPIFY_ACCESS_TOKEN,
+          MYSHOPIFY_DOMAIN,
+          null,
+          100
+        );
+
+        // Filter to only get variants that are available for sale
+        const availableVariants = allProducts.products.flatMap((product) =>
+          product.variants.edges
+            .filter((variant) => variant.node.availableForSale)
+            .map((variant) => variant.node.id.toString())
+        );
+
+        const variantId = availableVariants[0];
+        expect(variantId).toBeDefined();
+        if (!variantId) {
+          throw new Error("No available variant id found");
+        }
+        const draftOrderData: CreateDraftOrderPayload = {
+          lineItems: [
+            {
+              variantId,
+              quantity: 1,
+            },
+          ],
+          email: "test@example.com",
+          shippingAddress: {
+            address1: "123 Test St",
+            city: "Test City",
+            province: "Test Province",
+            country: "Test Country",
+            zip: "12345",
+            firstName: "Test",
+            lastName: "User",
+            countryCode: "US",
           },
-        ],
-        email: "test@example.com",
-        shippingAddress: {
-          address1: "123 Test St",
-          city: "Test City",
-          province: "Test Province",
-          country: "Test Country",
-          zip: "12345",
-          firstName: "Test",
-          lastName: "User",
-          countryCode: "US",
-        },
-        billingAddress: {
-          address1: "123 Test St",
-          city: "Test City",
-          province: "Test Province",
-          country: "Test Country",
-          zip: "12345",
-          firstName: "Test",
-          lastName: "User",
-          countryCode: "US",
-        },
-        tags: "test",
-        note: "Test draft order",
-      };
+          billingAddress: {
+            address1: "123 Test St",
+            city: "Test City",
+            province: "Test Province",
+            country: "Test Country",
+            zip: "12345",
+            firstName: "Test",
+            lastName: "User",
+            countryCode: "US",
+          },
+          tags: "test",
+          note: "Test draft order",
+        };
 
-      const draftOrder = await client.createDraftOrder(
-        SHOPIFY_ACCESS_TOKEN,
-        MYSHOPIFY_DOMAIN,
-        draftOrderData
-      );
-      expect(draftOrder).toBeDefined();
-      expect(draftOrder.draftOrderId).toBeDefined();
+        const draftOrder = await client.createDraftOrder(
+          SHOPIFY_ACCESS_TOKEN,
+          MYSHOPIFY_DOMAIN,
+          draftOrderData
+        );
+        expect(draftOrder).toBeDefined();
+        expect(draftOrder.draftOrderId).toBeDefined();
 
-      const completedOrder = await client.completeDraftOrder(
-        SHOPIFY_ACCESS_TOKEN,
-        MYSHOPIFY_DOMAIN,
-        draftOrder.draftOrderId,
-        draftOrderData.lineItems[0].variantId
-      );
-      expect(completedOrder).toBeDefined();
-      expect(completedOrder.orderId).toBeDefined();
-    });
+        const completedOrder = await client.completeDraftOrder(
+          SHOPIFY_ACCESS_TOKEN,
+          MYSHOPIFY_DOMAIN,
+          draftOrder.draftOrderId,
+          draftOrderData.lineItems[0].variantId
+        );
+        expect(completedOrder).toBeDefined();
+        expect(completedOrder.orderId).toBeDefined();
+      },
+      15000
+    ); // Increase timeout to 15 seconds for draft order operations
   });
 
   describe("Collections", () => {
