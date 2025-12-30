@@ -550,6 +550,127 @@ export type CompleteDraftOrderResponse = {
   orderId: string;
 };
 
+// Draft Order Update Types
+export type DraftOrderLineItemInput = {
+  variantId: string;
+  quantity: number;
+  appliedDiscount?: {
+    title: string;
+    value: number;
+    valueType: "FIXED_AMOUNT" | "PERCENTAGE";
+  };
+};
+
+export type UpdateDraftOrderLineItemInput = {
+  variantId: string;
+  quantity: number;
+};
+
+export type RemoveDraftOrderLineItemInput = {
+  variantId: string;
+};
+
+export type DraftOrderAddressInput = {
+  address1?: string;
+  address2?: string;
+  city?: string;
+  province?: string;
+  provinceCode?: string;
+  country?: string;
+  countryCode?: string;
+  zip?: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+};
+
+export type UpdateDraftOrderInput = {
+  addLineItems?: DraftOrderLineItemInput[];
+  removeLineItems?: RemoveDraftOrderLineItemInput[];
+  updateLineItems?: UpdateDraftOrderLineItemInput[];
+  email?: string;
+  note?: string;
+  tags?: string;
+  shippingAddress?: DraftOrderAddressInput;
+  billingAddress?: DraftOrderAddressInput;
+};
+
+export type UpdateDraftOrderResponse = {
+  draftOrderId: string;
+  draftOrderName: string;
+  lineItemCount: number;
+  totalPrice?: string;
+  currencyCode?: string;
+};
+
+export type DraftOrderInvoiceUrlResponse = {
+  draftOrderId: string;
+  invoiceUrl: string | null;
+};
+
+export type SendDraftOrderInvoiceResponse = {
+  draftOrderId: string;
+  invoiceUrl: string;
+  invoiceSentAt: string;
+};
+
+export type DraftOrderFetchResponse = {
+  id: string;
+  name: string;
+  email: string;
+  note: string | null;
+  tags: string[];
+  lineItems: {
+    edges: Array<{
+      node: {
+        id: string;
+        variant: {
+          id: string;
+        } | null;
+        quantity: number;
+        appliedDiscount: {
+          title: string;
+          value: number;
+          valueType: string;
+        } | null;
+      };
+    }>;
+  };
+  shippingAddress: {
+    address1?: string;
+    address2?: string;
+    city?: string;
+    province?: string;
+    provinceCode?: string;
+    country?: string;
+    countryCode?: string;
+    zip?: string;
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+  } | null;
+  billingAddress: {
+    address1?: string;
+    address2?: string;
+    city?: string;
+    province?: string;
+    provinceCode?: string;
+    country?: string;
+    countryCode?: string;
+    zip?: string;
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+  } | null;
+  invoiceUrl: string | null;
+  totalPriceSet: {
+    shopMoney: {
+      amount: string;
+      currencyCode: string;
+    };
+  };
+};
+
 function serializeError(err: any): any {
   if (Array.isArray(err)) {
     return err.map((item) => serializeError(item));
@@ -1062,6 +1183,33 @@ export interface ShopifyClientPort {
     draftOrderId: string,
     variantId: string
   ): Promise<CompleteDraftOrderResponse>;
+
+  getDraftOrder(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string
+  ): Promise<DraftOrderFetchResponse>;
+
+  updateDraftOrder(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string,
+    updateInput: UpdateDraftOrderInput
+  ): Promise<UpdateDraftOrderResponse>;
+
+  getDraftOrderInvoiceUrl(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string
+  ): Promise<DraftOrderInvoiceUrlResponse>;
+
+  sendDraftOrderInvoice(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string,
+    email?: string,
+    customMessage?: string
+  ): Promise<SendDraftOrderInvoiceResponse>;
 
   getIdFromGid(gid: string): string;
 

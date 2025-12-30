@@ -483,6 +483,202 @@ server.tool(
   }
 );
 
+server.tool(
+  "update-draft-order",
+  "Update an existing draft order by adding, removing, or updating line items and other fields",
+  {
+    draftOrderId: z
+      .string()
+      .describe("ID of the draft order to update (accepts both GID and numeric ID)"),
+    addLineItems: z
+      .array(
+        z.object({
+          variantId: z.string().describe("Product variant ID to add"),
+          quantity: z.number().min(1).describe("Quantity to add"),
+          appliedDiscount: z
+            .object({
+              title: z.string().describe("Discount title"),
+              value: z.number().describe("Discount value"),
+              valueType: z
+                .enum(["FIXED_AMOUNT", "PERCENTAGE"])
+                .describe("Type of discount"),
+            })
+            .optional()
+            .describe("Optional discount to apply to this line item"),
+        })
+      )
+      .optional()
+      .describe("Line items to add to the draft order"),
+    removeLineItems: z
+      .array(
+        z.object({
+          variantId: z.string().describe("Product variant ID to remove"),
+        })
+      )
+      .optional()
+      .describe("Line items to remove from the draft order"),
+    updateLineItems: z
+      .array(
+        z.object({
+          variantId: z.string().describe("Product variant ID to update"),
+          quantity: z
+            .number()
+            .min(1)
+            .describe("New quantity (use removeLineItems to remove completely)"),
+        })
+      )
+      .optional()
+      .describe("Line items to update quantities"),
+    email: z
+      .string()
+      .email()
+      .optional()
+      .describe("Customer email address"),
+    note: z.string().optional().describe("Internal note for the draft order"),
+    tags: z.string().optional().describe("Comma-separated tags"),
+    shippingAddress: z
+      .object({
+        address1: z.string().optional(),
+        address2: z.string().optional(),
+        city: z.string().optional(),
+        province: z.string().optional(),
+        provinceCode: z.string().optional(),
+        country: z.string().optional(),
+        countryCode: z.string().optional(),
+        zip: z.string().optional(),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        phone: z.string().optional(),
+      })
+      .optional()
+      .describe("Shipping address updates (partial updates supported)"),
+    billingAddress: z
+      .object({
+        address1: z.string().optional(),
+        address2: z.string().optional(),
+        city: z.string().optional(),
+        province: z.string().optional(),
+        provinceCode: z.string().optional(),
+        country: z.string().optional(),
+        countryCode: z.string().optional(),
+        zip: z.string().optional(),
+        firstName: z.string().optional(),
+        lastName: z.string().optional(),
+        phone: z.string().optional(),
+      })
+      .optional()
+      .describe("Billing address updates (partial updates supported)"),
+  },
+  async ({
+    draftOrderId,
+    addLineItems,
+    removeLineItems,
+    updateLineItems,
+    email,
+    note,
+    tags,
+    shippingAddress,
+    billingAddress,
+  }) => {
+    const client = new ShopifyClient();
+    try {
+      const result = await client.updateDraftOrder(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        draftOrderId,
+        {
+          addLineItems,
+          removeLineItems,
+          updateLineItems,
+          email,
+          note,
+          tags,
+          shippingAddress,
+          billingAddress,
+        }
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: safeJsonStringify({
+              success: true,
+              draftOrder: result,
+            }),
+          },
+        ],
+      };
+    } catch (error) {
+      return handleError("Failed to update draft order", error);
+    }
+  }
+);
+
+server.tool(
+  "get-draft-invoice-url",
+  "Get the checkout/invoice URL for a draft order without sending an email",
+  {
+    draftOrderId: z.string().describe("ID of the draft order"),
+  },
+  async ({ draftOrderId }) => {
+    const client = new ShopifyClient();
+    try {
+      const result = await client.getDraftOrderInvoiceUrl(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        draftOrderId
+      );
+      return {
+        content: [{ type: "text", text: safeJsonStringify(result) }],
+      };
+    } catch (error) {
+      return handleError("Failed to get draft order invoice URL", error);
+    }
+  }
+);
+
+server.tool(
+  "send-draft-invoice",
+  "Send an invoice email for a draft order and get the checkout URL",
+  {
+    draftOrderId: z.string().describe("ID of the draft order"),
+    email: z
+      .string()
+      .email()
+      .optional()
+      .describe("Override recipient email (uses draft order email if not provided)"),
+    customMessage: z
+      .string()
+      .optional()
+      .describe("Custom message to include in the invoice email"),
+  },
+  async ({ draftOrderId, email, customMessage }) => {
+    const client = new ShopifyClient();
+    try {
+      const result = await client.sendDraftOrderInvoice(
+        SHOPIFY_ACCESS_TOKEN,
+        MYSHOPIFY_DOMAIN,
+        draftOrderId,
+        email,
+        customMessage
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: safeJsonStringify({
+              success: true,
+              invoice: result,
+            }),
+          },
+        ],
+      };
+    } catch (error) {
+      return handleError("Failed to send draft order invoice", error);
+    }
+  }
+);
+
 // Collection Tools
 server.tool(
   "get-collections",

@@ -8,6 +8,11 @@ import {
   CreatePriceRuleInput,
   CreatePriceRuleResponse,
   DraftOrderResponse,
+  DraftOrderFetchResponse,
+  UpdateDraftOrderInput,
+  UpdateDraftOrderResponse,
+  DraftOrderInvoiceUrlResponse,
+  SendDraftOrderInvoiceResponse,
   GeneralShopifyClientError,
   GetPriceRuleInput,
   GetPriceRuleResponse,
@@ -1417,6 +1422,441 @@ export class ShopifyClient implements ShopifyClientPort {
       draftOrderId: draftOrder.id,
       orderId: order.id,
       draftOrderName: draftOrder.name,
+    };
+  }
+
+  async getDraftOrder(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string
+  ): Promise<DraftOrderFetchResponse> {
+    const draftOrderGid = this.ensureGid(draftOrderId, "DraftOrder");
+
+    const graphqlQuery = gql`
+      query getDraftOrder($id: ID!) {
+        draftOrder(id: $id) {
+          id
+          name
+          email
+          note
+          tags
+          lineItems(first: 250) {
+            edges {
+              node {
+                id
+                variant {
+                  id
+                }
+                quantity
+                appliedDiscount {
+                  title
+                  value
+                  valueType
+                }
+              }
+            }
+          }
+          shippingAddress {
+            address1
+            address2
+            city
+            province
+            provinceCode
+            country
+            countryCode
+            zip
+            firstName
+            lastName
+            phone
+          }
+          billingAddress {
+            address1
+            address2
+            city
+            province
+            provinceCode
+            country
+            countryCode
+            zip
+            firstName
+            lastName
+            phone
+          }
+          invoiceUrl
+          totalPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
+        }
+      }
+    `;
+
+    const res = await this.shopifyGraphqlRequest<{
+      data: {
+        draftOrder: DraftOrderFetchResponse | null;
+      };
+    }>({
+      url: `https://${myshopifyDomain}/admin/api/${this.SHOPIFY_API_VERSION}/graphql.json`,
+      accessToken,
+      query: graphqlQuery,
+      variables: {
+        id: draftOrderGid,
+      },
+    });
+
+    const draftOrder = res.data.data.draftOrder;
+
+    if (!draftOrder) {
+      throw new ShopifyInputError({
+        innerError: "Draft order not found",
+        contextData: {
+          myshopifyDomain,
+          draftOrderId,
+        },
+      });
+    }
+
+    return draftOrder;
+  }
+
+  async updateDraftOrder(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string,
+    updateInput: UpdateDraftOrderInput
+  ): Promise<UpdateDraftOrderResponse> {
+    // Step 1: Validate that at least one update is provided
+    const hasUpdates =
+      updateInput.addLineItems?.length ||
+      updateInput.removeLineItems?.length ||
+      updateInput.updateLineItems?.length ||
+      updateInput.email !== undefined ||
+      updateInput.note !== undefined ||
+      updateInput.tags !== undefined ||
+      updateInput.shippingAddress !== undefined ||
+      updateInput.billingAddress !== undefined;
+
+    if (!hasUpdates) {
+      throw new ShopifyInputError({
+        innerError: "No updates provided",
+        contextData: { draftOrderId, updateInput },
+      });
+    }
+
+    // Step 2: Ensure GID format
+    const draftOrderGid = this.ensureGid(draftOrderId, "DraftOrder");
+
+    // Step 3: Fetch current draft order state
+    const currentDraft = await this.getDraftOrder(
+      accessToken,
+      myshopifyDomain,
+      draftOrderGid
+    );
+
+    // Step 4: Extract current line items into a working map
+    const lineItemsMap = new Map<
+      string,
+      {
+        variantId: string;
+        quantity: number;
+        appliedDiscount?: {
+          title: string;
+          value: number;
+          valueType: "FIXED_AMOUNT" | "PERCENTAGE";
+        };
+      }
+    >();
+
+    // Populate map from current state
+    currentDraft.lineItems.edges.forEach((edge) => {
+      if (edge.node.variant?.id) {
+        const variantId = edge.node.variant.id;
+        lineItemsMap.set(variantId, {
+          variantId,
+          quantity: edge.node.quantity,
+          appliedDiscount: edge.node.appliedDiscount
+            ? {
+                title: edge.node.appliedDiscount.title,
+                value: edge.node.appliedDiscount.value,
+                valueType: edge.node.appliedDiscount
+                  .valueType as "FIXED_AMOUNT" | "PERCENTAGE",
+              }
+            : undefined,
+        });
+      }
+    });
+
+    // Step 5: Process remove operations FIRST
+    if (updateInput.removeLineItems?.length) {
+      updateInput.removeLineItems.forEach((item) => {
+        const variantGid = this.ensureGid(item.variantId, "ProductVariant");
+        lineItemsMap.delete(variantGid);
+      });
+    }
+
+    // Step 6: Process update operations
+    if (updateInput.updateLineItems?.length) {
+      updateInput.updateLineItems.forEach((item) => {
+        const variantGid = this.ensureGid(item.variantId, "ProductVariant");
+        const existingItem = lineItemsMap.get(variantGid);
+
+        if (existingItem) {
+          // Update quantity, keep existing discount
+          lineItemsMap.set(variantGid, {
+            ...existingItem,
+            quantity: item.quantity,
+          });
+        }
+        // If item doesn't exist, ignore (defensive behavior)
+      });
+    }
+
+    // Step 7: Process add operations LAST
+    if (updateInput.addLineItems?.length) {
+      updateInput.addLineItems.forEach((item) => {
+        const variantGid = this.ensureGid(item.variantId, "ProductVariant");
+
+        // If variant already exists, replace it (add operation overwrites)
+        lineItemsMap.set(variantGid, {
+          variantId: variantGid,
+          quantity: item.quantity,
+          appliedDiscount: item.appliedDiscount,
+        });
+      });
+    }
+
+    // Step 8: Convert map back to array
+    const finalLineItems = Array.from(lineItemsMap.values());
+
+    // Step 9: Prepare mutation variables
+    const mutationInput: any = {
+      lineItems: finalLineItems.map((item) => ({
+        variantId: item.variantId,
+        quantity: item.quantity,
+        appliedDiscount: item.appliedDiscount,
+      })),
+    };
+
+    // Add optional field updates
+    if (updateInput.email !== undefined) {
+      mutationInput.email = updateInput.email;
+    }
+    if (updateInput.note !== undefined) {
+      mutationInput.note = updateInput.note;
+    }
+    if (updateInput.tags !== undefined) {
+      mutationInput.tags = updateInput.tags;
+    }
+    if (updateInput.shippingAddress) {
+      mutationInput.shippingAddress = updateInput.shippingAddress;
+    }
+    if (updateInput.billingAddress) {
+      mutationInput.billingAddress = updateInput.billingAddress;
+    }
+
+    // Step 10: Execute mutation
+    const graphqlQuery = gql`
+      mutation draftOrderUpdate($id: ID!, $input: DraftOrderInput!) {
+        draftOrderUpdate(id: $id, input: $input) {
+          draftOrder {
+            id
+            name
+            lineItems(first: 250) {
+              edges {
+                node {
+                  id
+                }
+              }
+            }
+            totalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const res = await this.shopifyGraphqlRequest<{
+      data: {
+        draftOrderUpdate: {
+          draftOrder: {
+            id: string;
+            name: string;
+            lineItems: {
+              edges: Array<{ node: { id: string } }>;
+            };
+            totalPriceSet: {
+              shopMoney: {
+                amount: string;
+                currencyCode: string;
+              };
+            };
+          };
+          userErrors: Array<{
+            field: string[];
+            message: string;
+          }>;
+        };
+      };
+    }>({
+      url: `https://${myshopifyDomain}/admin/api/${this.SHOPIFY_API_VERSION}/graphql.json`,
+      accessToken,
+      query: graphqlQuery,
+      variables: {
+        id: draftOrderGid,
+        input: mutationInput,
+      },
+    });
+
+    // Step 11: Handle errors
+    const userErrors = res.data.data.draftOrderUpdate.userErrors;
+    if (userErrors.length > 0) {
+      throw getGraphqlShopifyUserError(userErrors, {
+        myshopifyDomain,
+        draftOrderId,
+        updateInput,
+      });
+    }
+
+    // Step 12: Return formatted response
+    const draftOrder = res.data.data.draftOrderUpdate.draftOrder;
+    return {
+      draftOrderId: draftOrder.id,
+      draftOrderName: draftOrder.name,
+      lineItemCount: draftOrder.lineItems.edges.length,
+      totalPrice: draftOrder.totalPriceSet.shopMoney.amount,
+      currencyCode: draftOrder.totalPriceSet.shopMoney.currencyCode,
+    };
+  }
+
+  async getDraftOrderInvoiceUrl(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string
+  ): Promise<DraftOrderInvoiceUrlResponse> {
+    const draftOrderGid = this.ensureGid(draftOrderId, "DraftOrder");
+
+    const graphqlQuery = gql`
+      query getDraftOrderInvoiceUrl($id: ID!) {
+        draftOrder(id: $id) {
+          id
+          invoiceUrl
+        }
+      }
+    `;
+
+    const res = await this.shopifyGraphqlRequest<{
+      data: {
+        draftOrder: {
+          id: string;
+          invoiceUrl: string | null;
+        } | null;
+      };
+    }>({
+      url: `https://${myshopifyDomain}/admin/api/${this.SHOPIFY_API_VERSION}/graphql.json`,
+      accessToken,
+      query: graphqlQuery,
+      variables: {
+        id: draftOrderGid,
+      },
+    });
+
+    const draftOrder = res.data.data.draftOrder;
+
+    if (!draftOrder) {
+      throw new ShopifyInputError({
+        innerError: "Draft order not found",
+        contextData: { myshopifyDomain, draftOrderId },
+      });
+    }
+
+    return {
+      draftOrderId: draftOrder.id,
+      invoiceUrl: draftOrder.invoiceUrl,
+    };
+  }
+
+  async sendDraftOrderInvoice(
+    accessToken: string,
+    myshopifyDomain: string,
+    draftOrderId: string,
+    email?: string,
+    customMessage?: string
+  ): Promise<SendDraftOrderInvoiceResponse> {
+    const draftOrderGid = this.ensureGid(draftOrderId, "DraftOrder");
+
+    const graphqlQuery = gql`
+      mutation draftOrderInvoiceSend($id: ID!, $email: EmailInput) {
+        draftOrderInvoiceSend(id: $id, email: $email) {
+          draftOrder {
+            id
+            invoiceUrl
+            invoiceSentAt
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const emailInput =
+      email || customMessage
+        ? {
+            to: email,
+            message: customMessage,
+          }
+        : undefined;
+
+    const res = await this.shopifyGraphqlRequest<{
+      data: {
+        draftOrderInvoiceSend: {
+          draftOrder: {
+            id: string;
+            invoiceUrl: string;
+            invoiceSentAt: string;
+          };
+          userErrors: Array<{
+            field: string[];
+            message: string;
+          }>;
+        };
+      };
+    }>({
+      url: `https://${myshopifyDomain}/admin/api/${this.SHOPIFY_API_VERSION}/graphql.json`,
+      accessToken,
+      query: graphqlQuery,
+      variables: {
+        id: draftOrderGid,
+        email: emailInput,
+      },
+    });
+
+    const userErrors = res.data.data.draftOrderInvoiceSend.userErrors;
+    if (userErrors.length > 0) {
+      throw getGraphqlShopifyUserError(userErrors, {
+        myshopifyDomain,
+        draftOrderId,
+        email,
+        customMessage,
+      });
+    }
+
+    const draftOrder = res.data.data.draftOrderInvoiceSend.draftOrder;
+    return {
+      draftOrderId: draftOrder.id,
+      invoiceUrl: draftOrder.invoiceUrl,
+      invoiceSentAt: draftOrder.invoiceSentAt,
     };
   }
 
